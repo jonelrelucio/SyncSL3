@@ -33,7 +33,22 @@ class Graph:
         pass
 
     def _averaging_sphere(self, estimates: List[np.ndarray]) -> np.ndarray:
-        pass
+        h_vecs = [h.flatten() / np.linalg.norm(h.flatten()) for h in estimates]
+
+        c = np.mean(h_vecs, axis=0)
+        c /= np.linalg.norm(c)
+
+        for _ in range(10):  # Fixed-point iteration
+            weights = []
+            for h in h_vecs:
+                dot = np.clip(np.dot(c, h), -1.0, 1.0)
+                denom = np.sqrt(1 - dot ** 2)
+                weights.append(1.0 / max(denom, 1e-6))
+
+            c = np.average(h_vecs, axis=0, weights=weights)
+            c /= np.linalg.norm(c)
+
+        return c.reshape((3, 3))
 
 
 
@@ -82,16 +97,11 @@ class Graph:
                 if not neighbors_ids:
                     continue
 
-                # Compute neighbor estimates: Xi|j = Zij * Xj [cite: 110, 115]
+                # Compute neighbor estimates: Xi|j = Zij * Xj
                 estimates = [self.edges[(i, j)] @ self.vertices[j] for j in neighbors_ids]
-
-                # Average the estimates [cite: 116]
                 avg_xi = avg_func(estimates)
-
-                # Normalize results to SL(3) [cite: 94, 189]
                 new_vertices[i] = self._norm_matrix(avg_xi)
 
-            # Check for convergence here if needed
             self.vertices.update(new_vertices)
 
 
@@ -114,7 +124,6 @@ def calculate_error(graph: Graph, ground_truth: Dict[int, np.ndarray]) -> floati
     errors = []
 
     # In synchronization, we find a global C such that estimated_Xi * C = true_Xi
-    # For a simple test, we can anchor the first node: C = inv(est_X0) * true_X0
     est_X0 = graph.get_vertex_proj(0)
     true_X0 = ground_truth[0]
     C = np.linalg.inv(est_X0) @ true_X0
@@ -127,7 +136,7 @@ def calculate_error(graph: Graph, ground_truth: Dict[int, np.ndarray]) -> floati
         v1 = est_Xi_aligned.flatten() / np.linalg.norm(est_Xi_aligned)
         v2 = true_Xi.flatten() / np.linalg.norm(true_Xi)
 
-        # Angular distance: arccos(|v1 · v2|) [cite: 201]
+        # Angular distance: arccos(|v1 · v2|)
         cos_theta = np.clip(np.abs(np.dot(v1, v2)), 0, 1)
         errors.append(np.arccos(cos_theta))
 
