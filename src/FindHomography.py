@@ -1,3 +1,5 @@
+import time
+
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,44 +13,47 @@ MIN_MATCH_COUNT = 20
 # OpenCV constant to specify the KD-Tree algorithm for FLANN matching
 FLANN_INDEX_KDTREE = 1
 
+# --- VISION PIPELINE ---
+# Minimum number of matched keypoints required to calculate a valid homography
+MIN_MATCH_COUNT = 10
+# OpenCV constant to specify the KD-Tree algorithm for FLANN matching
+FLANN_INDEX_KDTREE = 1
 
-def findHomographyBetweenImages(img1, img2):
+
+def compute_homography_from_features(kp1, des1, kp2, des2):
     """
-    Detects features in two images and computes the relative Homography matrix mapping img1 to img2.
+    Computes the relative Homography matrix using precomputed SIFT features.
+
+    Instead of running feature extraction on the images every time they are compared,
+    this function takes the already-extracted mathematical representations (descriptors)
+    and directly matches them.
 
     Algorithm breakdown:
-    1. SIFT: Extracts scale and rotation-invariant keypoints/descriptors.
-    2. FLANN: Quickly finds nearest-neighbor descriptor matches between the two images.
-    3. Lowe's Ratio Test: Filters out ambiguous matches.
-    4. RANSAC: Robustly estimates the homography while rejecting outliers (bad matches).
+    1. FLANN: Quickly finds nearest-neighbor descriptor matches between the two sets.
+    2. Lowe's Ratio Test: Filters out ambiguous matches.
+    3. RANSAC: Robustly estimates the homography while rejecting outliers (bad matches).
 
     Args:
-        img1 (numpy.ndarray): The source image (grayscale).
-        img2 (numpy.ndarray): The destination image (grayscale).
+        kp1 (tuple): Keypoints (pixel locations) from the source image.
+        des1 (numpy.ndarray): Descriptors (mathematical features) from the source image.
+        kp2 (tuple): Keypoints from the destination image.
+        des2 (numpy.ndarray): Descriptors from the destination image.
 
     Returns:
         M (numpy.ndarray or None): The 3x3 Homography matrix mapping img1 to img2.
         inlier_src (numpy.ndarray or None): The (x, y) coordinates of valid keypoints in img1.
         inlier_dst (numpy.ndarray or None): The (x, y) coordinates of valid keypoints in img2.
     """
-    # Initialize SIFT (Scale-Invariant Feature Transform)
-    sift = cv.SIFT_create()
-
-    # Detect keypoints (locations) and descriptors (mathematical representations of the area around keypoints)
-    kp1, des1 = sift.detectAndCompute(img1, None)
-    kp2, des2 = sift.detectAndCompute(img2, None)
-
-    # Safety check: ensure both images have enough features
+    # Safety check: ensure both images actually have enough features to compare
     if des1 is None or des2 is None or len(kp1) < 2 or len(kp2) < 2:
         return None, None, None
 
-    # FLANN (Fast Library for Approximate Nearest Neighbors) is much faster than brute-force
-    # matching for high-dimensional descriptors like SIFT.
+    # FLANN (Fast Library for Approximate Nearest Neighbors) setup
     index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
     search_params = dict(checks=50)  # Higher checks = more accurate but slower
     flann = cv.FlannBasedMatcher(index_params, search_params)
 
-    # Find the 2 best matches for each descriptor (k=2)
+    # Match the precomputed descriptors. k=2 finds the two best matches for each feature.
     matches = flann.knnMatch(des1, des2, k=2)
 
     good = []
@@ -61,18 +66,17 @@ def findHomographyBetweenImages(img1, img2):
     # We need at least 4 points to compute a homography, but setting a higher threshold (like 10)
     # ensures better mathematical stability.
     if len(good) > MIN_MATCH_COUNT:
-        # Extract the (x, y) coordinates for the good matches
+        # Extract the physical (x, y) pixel coordinates for the good matches
         src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
         dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
         # RANSAC (Random Sample Consensus) randomly selects subsets of points to calculate the
         # homography, finding the matrix that results in the highest number of "inliers" (points
-        # that fit the model). The '5.0' is the pixel tolerance for a point to be an inlier.
+        # that fit the model). The '5.0' is the pixel tolerance.
         M, mask = cv.findHomography(src_pts, dst_pts, cv.RANSAC, 5.0)
 
         if M is not None:
-            # The 'mask' array contains 1s for inliers and 0s for outliers.
-            # We extract ONLY the inliers that RANSAC agreed upon to use later for error evaluation.
+            # Extract ONLY the inliers that RANSAC agreed upon to use later for error evaluation
             matchesMask = mask.ravel() == 1
             inlier_src = src_pts[matchesMask]
             inlier_dst = dst_pts[matchesMask]
@@ -84,8 +88,11 @@ def findHomographyBetweenImages(img1, img2):
 
 def create_graph_from_real_images(dataset_paths: List[str]):
     """
-    Iterates through all unique pairs of images in the dataset to build a
-    Projectivity Synchronization graph.
+    Builds the Projectivity Synchronization graph using an optimized precomputation step.
+
+    By extracting SIFT features upfront, we reduce the computational complexity of
+    feature extraction from O(N^2) to O(N). We then perform the much faster FLANN
+    matching in an O(N^2) loop to find relative homographies.
 
     Args:
         dataset_paths (List[str]): List of file paths to the images.
@@ -95,23 +102,43 @@ def create_graph_from_real_images(dataset_paths: List[str]):
         matches_data (Dict): A dictionary mapping an edge tuple (i, j) to the RANSAC inlier points.
     """
     homography_graph = Graph()
-    matches_data = {}  # Dictionary to store our point pairs for evaluation
+    matches_data = {}
 
-    print(f"Building graph for {len(dataset_paths)} images...")
+    print(f"Precomputing SIFT features for {len(dataset_paths)} images...")
 
-    # Pairwise matching: compares every image to every other subsequent image
-    for i, img1_path in enumerate(dataset_paths):
-        img1 = cv.imread(img1_path, cv.IMREAD_GRAYSCALE)
-        if img1 is None: continue
+    # 1. PRECOMPUTATION STEP: Extract features once per image
+    sift = cv.SIFT_create()
+    precomputed_features = {}  # Dictionary mapping image index to its (keypoints, descriptors)
+
+    for i, img_path in enumerate(dataset_paths):
+        img = cv.imread(img_path, cv.IMREAD_GRAYSCALE)
+        if img is not None:
+            # Run the heavy SIFT extraction here
+            kp, des = sift.detectAndCompute(img, None)
+            precomputed_features[i] = (kp, des)
+        else:
+            print(f"Warning: Could not load image at {img_path}")
+            precomputed_features[i] = (None, None)
+
+    print("Matching features across image pairs...")
+
+    # 2. MATCHING STEP: Compare all image pairs using the precomputed features
+    for i in range(len(dataset_paths)):
+        kp1, des1 = precomputed_features[i]
+
+        # Skip if the first image failed to load or had no features
+        if des1 is None: continue
 
         for j in range(i + 1, len(dataset_paths)):
-            img2_path = dataset_paths[j]
-            img2 = cv.imread(img2_path, cv.IMREAD_GRAYSCALE)
-            if img2 is None: continue
+            kp2, des2 = precomputed_features[j]
 
-            # Calculate the relative homography (Z_ji). Takes approx 600-700ms per pair.
-            M, pts1, pts2 = findHomographyBetweenImages(img1, img2)
+            # Skip if the second image failed to load or had no features
+            if des2 is None: continue
 
+            # Pass the pre-extracted mathematical features instead of the raw images
+            M, pts1, pts2 = compute_homography_from_features(kp1, des1, kp2, des2)
+
+            # If a valid homography was found, add it to the graph
             if M is not None:
                 # M maps from img1 to img2. So Z_ji = M (where j=img2, i=img1)
                 homography_graph.add_edge(j, i, M)
@@ -119,7 +146,6 @@ def create_graph_from_real_images(dataset_paths: List[str]):
                 print(f"Added edge between Image {i} and Image {j}")
 
     return homography_graph, matches_data
-
 
 def calculate_reprojection_error(graph: Graph, matches_data: Dict) -> float:
     """
