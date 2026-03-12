@@ -30,7 +30,8 @@ class Graph:
         return np.mean(estimates, axis=0)
 
     def _averaging_direction(self, estimates: List[np.ndarray]) -> np.ndarray:
-        pass
+        return np.mean(estimates, axis=0) # TODO
+
 
     def _averaging_sphere(self, estimates: List[np.ndarray]) -> np.ndarray:
         h_vecs = [h.flatten() / np.linalg.norm(h.flatten()) for h in estimates]
@@ -53,6 +54,58 @@ class Graph:
 
 
     # PUBLIC ###########
+
+    def lsh(self) -> None:
+        uids = list(self.vertices.keys())
+        n = len(uids)
+
+        adj_matrix = self.build_adj_matrix()
+
+        identity = np.identity(n * 3)
+
+        u, s, vh = np.linalg.svd(adj_matrix - identity, full_matrices=False)
+
+        # print("U matrix:\n", u)
+        # print("Singular values:\n", s)
+        # print("Vh matrix:\n", vh)
+
+        v_smallest = vh[-3:, :]  # Shape: (3, 3n)
+
+        # Transpose to get the 3n x 3 matrix
+        u_hat = v_smallest.T  # Shape: (3n, 3)
+
+        # Extract and assign the 3x3 matrices to each vertex
+        for i in range(n):
+            # Slice out the 3x3 block for vertex i
+            raw_xi = u_hat[i * 3:(i + 1) * 3, :]
+            normalized_xi = self._norm_matrix(raw_xi)
+
+            self.vertices[uids[i]] = normalized_xi
+
+        print("Vertex dictionary:\n", self.vertices)
+
+
+    def build_adj_matrix(self) -> np.ndarray:
+        uids = list(self.vertices.keys())
+        n = len(uids)
+
+        matrix = np.zeros((3 * n, 3 * n))
+
+        for i in range(n):
+            for j in range(n):
+                u = uids[i]
+                v = uids[j]
+
+                edge_matrix = self.edges.get((u, v))
+
+                if edge_matrix is not None:
+                    matrix[i * 3:(i + 1) * 3, j * 3:(j + 1) * 3] = edge_matrix
+
+        return matrix
+
+
+
+
 
     def add_vertex(self, uid: int, initial_proj=None) -> None:
         self.vertices[uid] = initial_proj if initial_proj is not None else np.identity(3)
@@ -87,7 +140,6 @@ class Graph:
 
     def synchronize(self, avg_method: str = "euclidean", max_iters: int = 1000) -> None:
         sorted_vertices = self.get_sorted_vertices()
-        # Verify method exists in map
         avg_func = self.averaging_map.get(avg_method.lower(), self._averaging_euclidean)
 
         for _ in range(max_iters):
@@ -186,10 +238,41 @@ def run_experiment(node_counts: List[int], avg_method: str = "euclidean"):
     plt.show()
 
 
-def main():
+def run_experiment2(node_counts: List[int], avg_method: str = "euclidean"):
+    results = []
+
+    for n in node_counts:
+        g = Graph()
+        ground_truth = {}
+
+        # 1. Generate Ground Truth
+        for i in range(n):
+            gt_mat = generate_random()
+            ground_truth[i] = gt_mat
+            g.add_vertex(i, np.identity(3))
+
+        # 2. Generate Noisy Relative Measures
+        # Zij = Xi * inv(Xj) + noise
+        for i in range(n):
+            for j in range(i + 1, n):
+                if np.random.rand() > 0.3: # 70% connectivity
+                    rel_ij = ground_truth[i] @ np.linalg.inv(ground_truth[j])
+                    noisy_rel = add_noise(rel_ij, sigma=0.05)
+                    g.add_edge(i, j, noisy_rel)
+
+        # 3. Synchronize
+        g.normalize()
+        g.lsh()
+
+
+
+
+
+
+def main_paper():
     node_range = [10, 20, 30, 40, 50, 75, 100]
-    run_experiment(node_range, avg_method="euclidean")
+    run_experiment2(node_range, avg_method="direction")
 
 
 if __name__ == "__main__":
-    main()
+    main_paper()
