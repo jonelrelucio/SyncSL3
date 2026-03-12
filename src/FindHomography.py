@@ -1,6 +1,9 @@
 import cv2 as cv
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Dict, Tuple, Set, List, Optional, Callable, Any
+
+import Graph
 
 MIN_MATCH_COUNT = 10
 FLANN_INDEX_KDTREE = 1
@@ -64,14 +67,31 @@ def findHomographyBetweenImages(img1, img2):
                        matchesMask=matchesMask[:20],  # draw only inliers
                        flags=2)
 
-    img3 = cv.drawMatches(img1, kp1, img2, kp2, good[:20], None, **draw_params)
+    # DRAWING MATCHES
+    #img3 = cv.drawMatches(img1, kp1, img2, kp2, good[:20], None, **draw_params)
+    #plt.imshow(img3, 'gray')
+    #plt.show()
 
-    plt.imshow(img3, 'gray')
-    plt.show()
+    return M if matchesMask is not None else None
+
+def create_graph(dataset):
+    homography_graph = Graph.Graph()
+    for i, img1_path in enumerate(dataset):
+        for j, img2_path in enumerate(dataset):
+            if j <= i:
+                continue
+            img1 = cv.imread(img1_path, cv.IMREAD_GRAYSCALE)
+            img2 = cv.imread(img2_path, cv.IMREAD_GRAYSCALE)
+            M = findHomographyBetweenImages(img1, img2)
+            if M is not None:
+                homography_graph.add_vertex(img1_path[-8:-4])
+                homography_graph.add_vertex(img2_path[-8:-4])
+                homography_graph.add_edge(img1_path[-8:-4], img2_path[-8:-4], M)
 
 
-# Use absolute paths or double-check your relative paths
-img1 = cv.imread('../Alcatraz_courtyard/San_Francisco_2313.jpg', cv.IMREAD_GRAYSCALE)
-img2 = cv.imread('../Alcatraz_courtyard/San_Francisco_2314.jpg', cv.IMREAD_GRAYSCALE)
+dataset_path = "Alcatraz_courtyard"
+dataset = []
+for i in range(2313, 2446):
+    dataset.append("../" + dataset_path + "/" + f"San_Francisco_{i}.jpg")
 
-findHomographyBetweenImages(img1, img2)
+create_graph(dataset)
