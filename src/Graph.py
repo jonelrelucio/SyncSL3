@@ -71,10 +71,8 @@ class Graph:
         # print("Singular values:\n", s)
         # print("Vh matrix:\n", vh)
 
-        v_smallest = E[-3:, :]  # Shape: (3, 3n)
+        u_hat = E[:, -3:]  # Shape: (3n, 3)
 
-        # Transpose to get the 3n x 3 matrix
-        u_hat = v_smallest.T  # Shape: (3n, 3)
 
         # Extract and assign the 3x3 matrices to each vertex
         for i in range(n):
@@ -84,7 +82,7 @@ class Graph:
 
             self.vertices[uids[i]] = normalized_xi
 
-        #print("Vertex dictionary:\n", self.vertices)
+        print("Vertex dictionary:\n", self.vertices)
 
 
     def build_adj_matrix(self) -> np.ndarray:
