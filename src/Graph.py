@@ -2,6 +2,7 @@ import numpy as np
 from typing import Dict, Tuple, Set, List, Optional, Callable, Any
 import matplotlib.pyplot as plt
 from numpy import floating
+from numpy.ma.core import diag
 
 SEED = 120
 np.random.seed(SEED)
@@ -64,15 +65,14 @@ class Graph:
         identity = np.identity(n * 3)
 
         u, s, vh = np.linalg.svd(adj_matrix - identity, full_matrices=False)
+        E = u @ np.sqrt(np.identity(len(s)) * s)
 
         # print("U matrix:\n", u)
         # print("Singular values:\n", s)
         # print("Vh matrix:\n", vh)
 
-        v_smallest = vh[-3:, :]  # Shape: (3, 3n)
+        u_hat = E[:, -3:]  # Shape: (3n, 3)
 
-        # Transpose to get the 3n x 3 matrix
-        u_hat = v_smallest.T  # Shape: (3n, 3)
 
         # Extract and assign the 3x3 matrices to each vertex
         for i in range(n):
@@ -270,7 +270,8 @@ def run_experiment2(node_counts: List[int], avg_method: str = "euclidean"):
 
 
 def main_paper():
-    node_range = [10, 20, 30, 40, 50, 75, 100]
+    # node_range = [10, 20, 30, 40, 50, 75, 100]
+    node_range = [10]
     run_experiment2(node_range, avg_method="direction")
 
 
