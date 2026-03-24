@@ -356,7 +356,7 @@ if __name__ == "__main__":
 
     dataset = [
         f"../{dataset_path}/San_Francisco_{i}.jpg"
-        for i in range(start_img, start_img + 2)
+        for i in range(start_img, start_img + 20)
     ]
 
     # 1. Build graph
